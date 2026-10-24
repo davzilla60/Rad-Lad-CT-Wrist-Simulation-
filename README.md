@@ -5,13 +5,14 @@ An embeddable, single-file teaching simulator for the Rad-Lad website. Part of t
 
 ## Flow
 
-1. **Patient set-up** — choose how the patient lies for a CT of the **left** wrist:
-   prone with the arm overhead (the “superman” position, correct), supine with the arm overhead
-   (acceptable fall-back, part marks) or supine with the arm by the side (torso in the beam, no marks).
-   Only the first choice is graded; a wrong pick is explained and the patient is repositioned.
-   `load` then runs the real-time 3-D room (`room3d.js`, three.js from jsDelivr; falls back to an SVG
-   drawing): table moves head first, wrist landmarked at the gantry lasers, carpus to isocentre with the
-   head and body outside the scan plane.
+1. **Patient set-up** — the patient arrives supine with the arms by the side; choose how they should lie
+   for a CT of the **left** wrist: prone with the arm overhead (the “superman” position, correct), supine with
+   the arm overhead (acceptable fall-back, part marks) or supine with the arm by the side (no marks).
+   The 3-D room (`room3d.js`, three.js from jsDelivr; falls back to an SVG drawing) shows the chosen pose
+   straight away and the choice can be changed until `load`, but only the **first** pick is graded.
+   `load` moves the table head first to the lasers and then to the scan position for that pose — with the
+   arm by the side the head and chest pass right through the gantry to bring the wrist into the scan plane,
+   and the review images then carry simulated beam-hardening streaks and noise.
 2. **Scanogram** — PA + lateral localisers (`scout`).
 3. **Range + DFOV** — one box on the PA scanogram: its height is the scan range, its width the display
    FOV (square, 512 matrix; the lateral inset shows the depth it covers).

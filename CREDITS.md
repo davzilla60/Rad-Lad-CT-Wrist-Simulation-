@@ -24,13 +24,15 @@ KU Leuven Research Data Repository (RDR), 2024. https://doi.org/10.48804/DWF4RG
    HR-pQCT scan of the same specimen) is that of a left wrist, which is how it is presented here.
 6. A cadaveric donor scan is presented as a teaching patient. No fracture is marked in the source dataset.
 7. The tissue outline used to judge DFOV clipping ignores a cable tie / strap attached to the specimen.
+8. If the arm-by-the-side position is chosen, streak artefacts and noise are added to the images in the browser to
+   simulate the torso being in the beam — they are not present in the acquired data.
 
 This adaptation (the images in `assets/` and the inlined pages) is shared under **CC BY-SA 4.0**.
 Neither the dataset authors nor KU Leuven endorse this simulator.
 
 ## Other artwork
 
-- Patient-positioning scene (CT room, prone “superman” position, head-first table movement, lasers): original 3-D
+- Patient-positioning scene (CT room, three selectable patient positions, head-first table movement, lasers): original 3-D
   scene built procedurally for this project in `room3d.js` — no third-party models, photos or textures. A simpler
   original SVG drawing is the fallback if WebGL or the CDN is unavailable.
 - 3-D rendering: [three.js](https://threejs.org) r160 (MIT licence, (c) three.js authors), loaded at runtime from

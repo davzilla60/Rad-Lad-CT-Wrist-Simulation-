@@ -1,8 +1,8 @@
 /* 3-D CT room for the patient set-up step (three.js, procedural — no external models).
    window.SCG_ROOM3D(THREE, host) -> { play(onStep, onDone), reset(), start(), stop() }
    World axes: +x along the table toward the gantry, +y up, +z toward the camera.
-   Patient PRONE, HEAD FIRST (head toward +x), left arm stretched above the head with the wrist
-   leading into the bore - the "superman" position for a CT wrist (patient's right = +z). */
+   Patient HEAD FIRST (head toward +x); setPose() switches between prone with the left arm overhead
+   (the "superman" position), supine with the left arm overhead and supine with the arm by the side. */
 window.SCG_ROOM3D = function(THREE, host){
   "use strict";
   var V3 = THREE.Vector3;
@@ -249,20 +249,15 @@ window.SCG_ROOM3D = function(THREE, host){
   var mat = rbox(2.05, 0.055, 0.48, 0.022, M.mattress); mat.position.set(-0.1, 0.8625, 0); couch.add(mat);
 
   /* ---------------- patient (local to couch) ---------------- */
-  /* PRONE, HEAD FIRST: head toward +x (the gantry), back up, face turned toward the camera (+z = patient's
-     right) resting on the left cheek; LEFT arm (-z) stretched above the head on a foam pad, palm down,
-     right arm by the side. */
+  /* Head first (head toward +x, the gantry). Three set-ups, rebuilt by setPose():
+     "prone"    - PRONE, face turned toward the camera resting on the left cheek, LEFT arm (-z) stretched above
+                  the head on a foam pad, palm down, right arm by the side (the "superman" position);
+     "overhead" - SUPINE, face up, LEFT arm (+z, camera side) raised above the head on the pad, palm down;
+     "side"     - SUPINE, both arms by the side, the left wrist on a pad beside the hip. */
   var hx = 0.55;                         // head centre (local x)
-  var patient = new THREE.Group(); couch.add(patient);
-  var pillow = rbox(0.26, 0.05, 0.3, 0.022, M.foam); pillow.position.set(hx-0.01, T+0.024, 0.07); patient.add(pillow);
-  var WR = new V3(hx+0.42, T+0.062, -0.07);           // left wrist: the scanned joint
-  var armPad = rbox(0.62, 0.032, 0.16, 0.014, M.foam); armPad.position.set(hx+0.36, T+0.016, -0.08); patient.add(armPad);
-
-  var hy = T + 0.048 + 0.076;            // head centre height (lying on its side)
-  /* sculpted head: displaced sphere. Canonical frame: +Y = crown, +Z = face, +X = patient's left.
-     Basis maps it to prone, head first, turned to the right: crown -> +x, face -> +z, left -> down. */
   function g2(x, y, sx, sy){ return Math.exp(-(x*x)/(sx*sx) - (y*y)/(sy*sy)); }
   function sstep(e0, e1, x){ var t = Math.max(0, Math.min(1, (x - e0)/(e1 - e0))); return t*t*(3 - 2*t); }
+  /* sculpted head: displaced sphere. Canonical frame: +Y = crown, +Z = face, +X = patient's left. */
   function headShape(p){                          // p on the unit sphere -> displaced point
     var x = p.x, y = p.y, z = p.z, f = Math.max(0, z), d = 0;
     d += 0.055*f*g2(x, y - 0.3, 0.55, 0.1);                                    // brow ridge
@@ -303,98 +298,128 @@ window.SCG_ROOM3D = function(THREE, host){
     g.computeVertexNormals();
     return g;
   }
-  var headG = new THREE.Group();
-  headG.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(new V3(0, -1, 0), new V3(1, 0, 0), new V3(0, 0, 1)));
-  headG.position.set(hx, hy, 0.07); patient.add(headG);
+  var HEAD_GEO = headGeo();                       // built once, shared by every pose
   M.head = M.skin.clone(); M.head.color.set(0xffffff); M.head.vertexColors = true;
-  var head = new THREE.Mesh(headGeo(), M.head); head.castShadow = head.receiveShadow = true; headG.add(head);
-  [-1, 1].forEach(function(sd){
-    var ear = ellipsoid(0.009, 0.024, 0.014, M.skin, 24); ear.position.set(sd*0.072, -0.02, -0.012); ear.rotation.x = -0.15; headG.add(ear);
-  });
-  patient.add(limb(new V3(hx-0.17, T+0.09, 0.03), new V3(hx-0.05, T+0.085, 0.06), 0.048, M.skin));   // neck
+  M.bag = new THREE.MeshStandardMaterial({ color:0x4b5a66, roughness:0.85 });
 
-  // torso in a gown, prone (back up): lofted elliptical sections from the shoulders toward the feet (-x)
-  var tx0 = hx - 0.13, tLen = 0.66;
-  var RZ = [[0, 0.2], [0.12, 0.205], [0.4, 0.175], [0.7, 0.155], [1, 0.18]];
-  var RY = [[0, 0.08], [0.12, 0.095], [0.4, 0.105], [0.7, 0.095], [1, 0.11]];
-  var torso = new THREE.Mesh(gridGeo(60, 48, function(u, v){
-    var cap = u < 0.09 ? Math.pow(Math.sin(u/0.09*Math.PI/2), 0.42) : 1;
-    var rz = prof(RZ, u)*cap, ry = prof(RY, u)*cap, a = -Math.PI/2 + v*Math.PI*2, s = Math.sin(a);
-    var y = T + ry*0.55 + (s >= 0 ? ry*s : ry*0.55*s);
-    var fold = 0.003*Math.sin(u*40 + v*18) + 0.002*Math.sin(u*90 - v*30);
-    return [tx0 - u*tLen, y + (s > 0 ? fold : 0), rz*Math.cos(a)*(1 + (s > 0 ? fold*2 : 0))];
-  }), M.gown);
-  torso.castShadow = torso.receiveShadow = true; patient.add(torso);
+  var patient = null, pillow = null, armPad = null, WR = null, POSE = "prone";
+  function buildPatient(pose){
+    if(patient){
+      couch.remove(patient);
+      patient.traverse(function(c){ if(c.isMesh && c.geometry !== HEAD_GEO) c.geometry.dispose(); });
+    }
+    POSE = pose;
+    var prone = pose === "prone";
+    patient = new THREE.Group(); couch.add(patient);
+    var L = prone ? -1 : 1;                       // side (z sign) of the patient's LEFT arm
 
-  function makeHand(wr, dir, curl){
-    var hand = new THREE.Group(); hand.position.copy(wr); hand.position.y -= 0.006;
-    hand.quaternion.setFromUnitVectors(new V3(1, 0, 0), dir); patient.add(hand);
-    var palm = ellipsoid(0.05, 0.015, 0.038, M.skin, 28); palm.position.x = 0.05; hand.add(palm);
-    var fing = ellipsoid(0.05, 0.011, 0.035, M.skin, 28); fing.position.set(0.118, -0.004, -0.002); fing.rotation.z = -curl; hand.add(fing);
-    hand.add(taper(new V3(0.015, -0.002, 0.03), new V3(0.075, -0.006, 0.052), 0.012, 0.009, M.skin));   // thumb
-    return hand;
-  }
-  // LEFT arm stretched above the head, palm down on the pad
-  (function(){
-    var sh = new V3(hx-0.15, T+0.1, -0.17), el = new V3(hx+0.13, T+0.072, -0.14);
-    patient.add(taper(sh, el, 0.047, 0.037, M.skin));
-    patient.add(taper(sh, sh.clone().lerp(el, 0.3), 0.056, 0.05, M.gown));     // short sleeve
-    patient.add(taper(el, WR, 0.037, 0.026, M.skin));
-    var j = ellipsoid(0.037, 0.034, 0.037, M.skin, 24); j.position.copy(el); patient.add(j);
-    makeHand(WR, new V3(1, -0.02, 0.03).normalize(), 0.05);
-  })();
-  // right arm by the side
-  (function(){
-    var sh = new V3(hx-0.16, T+0.1, 0.2), el = new V3(hx-0.44, T+0.06, 0.235), wr = new V3(hx-0.7, T+0.04, 0.215);
-    patient.add(taper(sh, el, 0.047, 0.037, M.skin));
-    patient.add(taper(sh, sh.clone().lerp(el, 0.3), 0.056, 0.05, M.gown));
-    patient.add(taper(el, wr, 0.037, 0.026, M.skin));
-    var j = ellipsoid(0.037, 0.034, 0.037, M.skin, 24); j.position.copy(el); patient.add(j);
-    makeHand(wr, new V3(-1, -0.05, -0.03).normalize(), 0.3);
-  })();
+    // head + pillow
+    var headG = new THREE.Group(), hz = prone ? 0.07 : 0;
+    pillow = rbox(prone ? 0.26 : 0.3, 0.05, prone ? 0.3 : 0.32, 0.022, M.foam);
+    pillow.position.set(hx-0.01, T+0.024, hz); patient.add(pillow);
+    if(prone){   // crown -> +x, face -> +z (turned toward the camera), left -> down
+      headG.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(new V3(0, -1, 0), new V3(1, 0, 0), new V3(0, 0, 1)));
+      headG.position.set(hx, T + 0.048 + 0.076, hz);
+    } else {     // supine: crown -> +x, face -> up, left -> +z
+      headG.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(new V3(0, 0, 1), new V3(1, 0, 0), new V3(0, 1, 0)));
+      headG.position.set(hx, T + 0.048 + 0.092, 0);
+    }
+    patient.add(headG);
+    var head = new THREE.Mesh(HEAD_GEO, M.head); head.castShadow = head.receiveShadow = true; headG.add(head);
+    [-1, 1].forEach(function(sd){
+      var ear = ellipsoid(0.009, 0.024, 0.014, M.skin, 24); ear.position.set(sd*0.072, -0.02, -0.012); ear.rotation.x = -0.15; headG.add(ear);
+    });
+    patient.add(prone ? limb(new V3(hx-0.17, T+0.09, 0.03), new V3(hx-0.05, T+0.085, 0.06), 0.048, M.skin)
+                      : limb(new V3(hx-0.18, T+0.098, 0), new V3(hx-0.06, T+0.1, 0), 0.05, M.skin));   // neck
 
-  // blanket over the hips and legs, feet away from the gantry (prone: soles up, toes down)
-  var bx0 = tx0 - tLen + 0.04, bLen = 1.0;
-  var LC = [[0, 0.07], [0.2, 0.095], [0.5, 0.095], [0.8, 0.09], [1, 0.095]];
-  var LR = [[0, 0.15], [0.18, 0.11], [0.45, 0.075], [0.55, 0.07], [0.8, 0.06], [0.9, 0.06], [1, 0.07]];
-  var LH = [[0, 0.15], [0.12, 0.155], [0.35, 0.12], [0.5, 0.105], [0.68, 0.115], [0.84, 0.085], [0.93, 0.1], [0.97, 0.09], [1, 0.06]];
-  function clothY(u, z){
-    var c = prof(LC, u), r = prof(LR, u), h = prof(LH, u);
-    var gl = Math.exp(-Math.pow((z + c)/r, 2)), gr = Math.exp(-Math.pow((z - c)/r, 2));
-    var k = 9, sm = Math.log(Math.exp(k*gl) + Math.exp(k*gr))/k;
-    sm = Math.min(1, sm*1.03);
-    var tail = 0.018*Math.exp(-Math.pow(z/0.32, 2));
-    var hang = Math.max(0, Math.abs(z) - 0.245);
-    return T + 0.006 + h*sm + tail - hang*1.6 - hang*hang*6;
-  }
-  var blanket = new THREE.Mesh(gridGeo(140, 72, function(u, v){
-    var sgn = v*2 - 1, z = sgn*0.33;
-    var y = clothY(u, z);
-    var wr = (0.0035*Math.sin(19*u + 11*sgn) + 0.0025*Math.sin(53*u - 17*sgn + 1.3) + 0.0015*Math.sin(130*u + 5*sgn)) *
-             (0.5 + 0.5*Math.exp(-Math.pow(z/0.2, 2)));
-    wr += Math.abs(z) > 0.17 ? 0.006*Math.sin(28*u + 40*Math.abs(z)) * Math.min(1, (Math.abs(z) - 0.17)/0.06) : 0;
-    var x = bx0 - u*bLen;
-    if(u > 0.975){ var e = (u - 0.975)/0.025; x -= e*0.03; y -= e*e*0.07; }
-    return [x, y + wr, z];
-  }), M.blanket);
-  blanket.castShadow = blanket.receiveShadow = true; patient.add(blanket);
-  (function(){                                       // folded-down hem at the waist
-    var pts = [];
+    // torso in a gown: lofted elliptical sections from the shoulders toward the feet (-x)
+    var tx0 = hx - 0.13, tLen = 0.66;
+    var RZ = [[0, 0.2], [0.12, 0.205], [0.4, 0.175], [0.7, 0.155], [1, 0.18]];
+    var RY = prone ? [[0, 0.08], [0.12, 0.095], [0.4, 0.105], [0.7, 0.095], [1, 0.11]]
+                   : [[0, 0.085], [0.12, 0.1], [0.4, 0.118], [0.7, 0.1], [1, 0.105]];
+    var torso = new THREE.Mesh(gridGeo(60, 48, function(u, v){
+      var cap = u < 0.09 ? Math.pow(Math.sin(u/0.09*Math.PI/2), 0.42) : 1;
+      var rz = prof(RZ, u)*cap, ry = prof(RY, u)*cap, a = -Math.PI/2 + v*Math.PI*2, s = Math.sin(a);
+      var y = T + ry*0.55 + (s >= 0 ? ry*s : ry*0.55*s);
+      var fold = 0.003*Math.sin(u*40 + v*18) + 0.002*Math.sin(u*90 - v*30);
+      return [tx0 - u*tLen, y + (s > 0 ? fold : 0), rz*Math.cos(a)*(1 + (s > 0 ? fold*2 : 0))];
+    }), M.gown);
+    torso.castShadow = torso.receiveShadow = true; patient.add(torso);
+
+    // thumb: +1 puts it on the hand's local +z side
+    function makeHand(wr, dir, curl, thumb){
+      var hand = new THREE.Group(); hand.position.copy(wr); hand.position.y -= 0.006;
+      hand.quaternion.setFromUnitVectors(new V3(1, 0, 0), dir); patient.add(hand);
+      var palm = ellipsoid(0.05, 0.015, 0.038, M.skin, 28); palm.position.x = 0.05; hand.add(palm);
+      var fing = ellipsoid(0.05, 0.011, 0.035, M.skin, 28); fing.position.set(0.118, -0.004, -0.002*thumb); fing.rotation.z = -curl; hand.add(fing);
+      hand.add(taper(new V3(0.015, -0.002, 0.03*thumb), new V3(0.075, -0.006, 0.052*thumb), 0.012, 0.009, M.skin));
+      return hand;
+    }
+    function arm(sh, el, wr, dir, curl, thumb){
+      patient.add(taper(sh, el, 0.047, 0.037, M.skin));
+      patient.add(taper(sh, sh.clone().lerp(el, 0.3), 0.056, 0.05, M.gown));     // short sleeve
+      patient.add(taper(el, wr, 0.037, 0.026, M.skin));
+      var j = ellipsoid(0.037, 0.034, 0.037, M.skin, 24); j.position.copy(el); patient.add(j);
+      makeHand(wr, dir, curl, thumb);
+    }
+    function sideArm(s, thumb){                  // arm resting by the side, palm down
+      var sh = new V3(hx-0.16, T+0.1, s*0.2), el = new V3(hx-0.44, T+0.06, s*0.235), wr = new V3(hx-0.7, T+0.045, s*0.215);
+      arm(sh, el, wr, new V3(-1, -0.05, -s*0.03).normalize(), 0.3, thumb);
+      return wr;
+    }
+    if(pose === "side"){
+      // both arms by the side; palm down, thumbs toward the body
+      WR = sideArm(L, -1);
+      sideArm(-L, 1);
+      armPad = rbox(0.42, 0.02, 0.12, 0.01, M.foam); armPad.position.set(hx-0.78, T+0.01, L*0.22); patient.add(armPad);
+      var bag1 = rbox(0.16, 0.05, 0.07, 0.025, M.bag); bag1.position.set(hx-0.74, T+0.03, L*0.31); patient.add(bag1);
+    } else {
+      // LEFT arm stretched above the head, palm down on the pad; thumb toward the head
+      WR = new V3(hx+0.42, T+0.062, L*0.07);
+      armPad = rbox(0.62, 0.032, 0.16, 0.014, M.foam); armPad.position.set(hx+0.36, T+0.016, L*0.08); patient.add(armPad);
+      arm(new V3(hx-0.15, T+0.1, L*0.17), new V3(hx+0.13, T+0.072, L*0.14), WR, new V3(1, -0.02, -L*0.03).normalize(), 0.05, -L);
+      sideArm(-L, prone ? 1 : -1);               // other arm by the side
+      var bag = rbox(0.16, 0.05, 0.07, 0.025, M.bag); bag.position.set(hx+0.3, T+0.057, L*0.17); patient.add(bag);
+    }
+
+    // blanket over the hips and legs, feet away from the gantry
+    var bx0 = tx0 - tLen + 0.04, bLen = 1.0;
+    var LC = [[0, 0.07], [0.2, 0.095], [0.5, 0.095], [0.8, 0.09], [1, 0.095]];
+    var LR = [[0, 0.15], [0.18, 0.11], [0.45, 0.075], [0.55, 0.07], [0.8, 0.06], [0.9, 0.06], [1, 0.07]];
+    var LH = prone   // prone: soles up, toes down / supine: toes up
+      ? [[0, 0.15], [0.12, 0.155], [0.35, 0.12], [0.5, 0.105], [0.68, 0.115], [0.84, 0.085], [0.93, 0.1], [0.97, 0.09], [1, 0.06]]
+      : [[0, 0.165], [0.15, 0.165], [0.4, 0.145], [0.52, 0.135], [0.56, 0.14], [0.75, 0.115], [0.86, 0.095], [0.91, 0.15], [0.95, 0.185], [0.98, 0.15], [1, 0.09]];
+    function clothY(u, z){
+      var c = prof(LC, u), r = prof(LR, u), h = prof(LH, u);
+      var gl = Math.exp(-Math.pow((z + c)/r, 2)), gr = Math.exp(-Math.pow((z - c)/r, 2));
+      var k = 9, sm = Math.log(Math.exp(k*gl) + Math.exp(k*gr))/k;
+      sm = Math.min(1, sm*1.03);
+      var tail = 0.018*Math.exp(-Math.pow(z/0.32, 2));
+      var hang = Math.max(0, Math.abs(z) - 0.245);
+      return T + 0.006 + h*sm + tail - hang*1.6 - hang*hang*6;
+    }
+    var blanket = new THREE.Mesh(gridGeo(140, 72, function(u, v){
+      var sgn = v*2 - 1, z = sgn*0.33;
+      var y = clothY(u, z);
+      var wr = (0.0035*Math.sin(19*u + 11*sgn) + 0.0025*Math.sin(53*u - 17*sgn + 1.3) + 0.0015*Math.sin(130*u + 5*sgn)) *
+               (0.5 + 0.5*Math.exp(-Math.pow(z/0.2, 2)));
+      wr += Math.abs(z) > 0.17 ? 0.006*Math.sin(28*u + 40*Math.abs(z)) * Math.min(1, (Math.abs(z) - 0.17)/0.06) : 0;
+      var x = bx0 - u*bLen;
+      if(u > 0.975){ var e = (u - 0.975)/0.025; x -= e*0.03; y -= e*e*0.07; }
+      return [x, y + wr, z];
+    }), M.blanket);
+    blanket.castShadow = blanket.receiveShadow = true; patient.add(blanket);
+    var pts = [];                                    // folded-down hem at the waist
     for(var i=0;i<=48;i++){ var z = (i/48*2 - 1)*0.33; pts.push(new V3(bx0 - 0.012, clothY(0.01, z) + 0.014, z)); }
     var cuff = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 96, 0.018, 12, false), M.blanket);
     cuff.castShadow = true; patient.add(cuff);
-  })();
-
-  /* sandbag beside the forearm */
-  var bag = rbox(0.16, 0.05, 0.07, 0.025, new THREE.MeshStandardMaterial({ color:0x4b5a66, roughness:0.85 }));
-  bag.position.set(hx+0.3, T+0.057, -0.17); patient.add(bag);
+  }
+  buildPatient("prone");
 
   function updateTube(){}                     // (no injector line in this scene)
 
   /* ---------------- lasers (traced onto the patient's surface) ---------------- */
   var laserGroup = new THREE.Group(); laserGroup.visible = false; scene.add(laserGroup);
-  var hitTargets = [];
-  patient.traverse(function(c){ if(c.isMesh && c !== pillow && c !== armPad) hitTargets.push(c); });
   var ray = new THREE.Raycaster();
   function laserLine(points){
     if(points.length < 2) return;
@@ -405,6 +430,8 @@ window.SCG_ROOM3D = function(THREE, host){
   function buildLasers(){
     while(laserGroup.children.length){ var m = laserGroup.children.pop(); m.geometry.dispose(); }
     scene.updateMatrixWorld(true);
+    var hitTargets = [];
+    patient.traverse(function(c){ if(c.isMesh && c !== pillow && c !== armPad) hitTargets.push(c); });
     var pts = [], z, hit;
     for(z=-0.36; z<=0.36; z+=0.008){                       // transverse line in the gantry laser plane
       ray.set(new V3(LASER_X, 2, z), new V3(0, -1, 0));
@@ -414,7 +441,7 @@ window.SCG_ROOM3D = function(THREE, host){
     laserLine(pts);
     pts = [];
     for(var x=LASER_X-0.3; x<=LASER_X+0.22; x+=0.01){       // longitudinal line at mid-wrist height
-      ray.set(new V3(x, T+0.06, 1.0), new V3(0, 0, -1));
+      ray.set(new V3(x, WR.y, 1.0), new V3(0, 0, -1));
       hit = ray.intersectObjects(hitTargets, false)[0];
       if(hit) pts.push(hit.point.clone().add(new V3(0, 0, 0.002)));
     }
@@ -426,8 +453,9 @@ window.SCG_ROOM3D = function(THREE, host){
 
   /* ---------------- camera / animation ---------------- */
   var COUCH0 = 0.0;
-  var landmarkLocal = WR.x;                                   // wrist joint at the lasers
-  var X1 = LASER_X - landmarkLocal, X2 = G - WR.x - 0.01;    // then the carpus to isocentre
+  var X1, X2;
+  function calcX(){ X1 = LASER_X - WR.x; X2 = G - WR.x - 0.01; }   // wrist joint to the lasers, then the carpus to isocentre
+  calcX();
   var CAM_A = { p:new V3(-0.9, 2.6, 4.1), t:new V3(0.2, 0.88, 0) };
   var CAM_B = { p:new V3(-0.3, 2.4, 3.8), t:new V3(0.95, 0.95, 0) };
   function setCam(k){
@@ -475,7 +503,17 @@ window.SCG_ROOM3D = function(THREE, host){
     stop:function(){ running = false; if(raf){ cancelAnimationFrame(raf); raf = 0; } },
     pose:function(k){ anim = null; couch.position.x = k===2 ? X1 : (k===3 ? X2 : COUCH0); if(k===2){ buildLasers(); laserGroup.visible = true; } else laserGroup.visible = false; setCam(k===2 ? 0.55 : k===3 ? 1 : 0); updateTube(); kick(); },
     cam:function(p, t){ CAM_A = CAM_B = { p:new V3(p[0],p[1],p[2]), t:new V3(t[0],t[1],t[2]) }; setCam(0); kick(); },
+    setPose:function(name){
+      if(name !== POSE){ buildPatient(name); calcX(); }
+      // arm by the side: finish behind the gantry, where the head and chest come out of the bore
+      CAM_B = name === "side" ? { p:new V3(3.6, 2.4, 2.9), t:new V3(1.7, 0.95, 0) } : { p:new V3(-0.3, 2.4, 3.8), t:new V3(0.95, 0.95, 0) };
+      reset();
+    },
     finish:function(){ if(anim){ anim.t0 = performance.now() - 6600; kick(); } },
+    snap:function(w, h){                         // debug: render one frame at w x h and return it as a PNG data URL
+      renderer.setSize(w, h, false); camera.aspect = w/h; camera.fov = 30; camera.updateProjectionMatrix();
+      renderer.render(scene, camera); var u = renderer.domElement.toDataURL("image/png"); resize(); kick(); return u;
+    },
     renderer:renderer
   };
 };

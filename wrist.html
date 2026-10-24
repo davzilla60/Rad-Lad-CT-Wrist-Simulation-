@@ -358,7 +358,7 @@
 #scg-root .scg-roomcap{position:absolute;left:50%;top:12px;transform:translateX(-50%);z-index:2;display:none;
   text-align:center;padding:7px 14px;border-radius:8px;background:rgba(10,14,9,.72);backdrop-filter:blur(3px);max-width:92%}
 #scg-root .scg-room.is-3d .scg-roomcap{display:block}
-#scg-root .scg-roomcap b{display:block;font-family:var(--sans);font-size:12px;letter-spacing:.24em;color:var(--ink);white-space:nowrap}
+#scg-root .scg-roomcap b{display:block;font-family:var(--sans);font-size:12px;letter-spacing:.24em;color:var(--ink)}
 #scg-root .scg-roomcap span{display:block;font-size:10.5px;color:#9fe7b8;letter-spacing:.04em;margin-top:2px}
 #scg-root .scg-room .scg-couch{transition:transform 4.2s cubic-bezier(.45,.05,.25,1)}
 #scg-root .scg-room.is-in .scg-couch{transform:translateX(70px)}
@@ -380,6 +380,9 @@
   #scg-root .scg-phasechip{font-size:9px;letter-spacing:.1em;padding:4px 7px}
   #scg-root .scg-viewport{max-height:74vh}
   #scg-root .scg-log{height:84px}
+  #scg-root .scg-roomcap{top:8px;padding:5px 9px}
+  #scg-root .scg-roomcap b{font-size:10px;letter-spacing:.1em}
+  #scg-root .scg-roomcap span{font-size:9.5px}
 }
 
 /* ===== "Superman Scanned" achievement / marker ===== */
@@ -500,6 +503,7 @@
 #scg-root .scg-orient .o-l{left:8px;top:50%;transform:translateY(-50%)}
 #scg-root .scg-orient .o-r{right:40px;top:50%;transform:translateY(-50%)}
 #scg-root .scg-wsep{width:6px}
+#scg-root .scg-choice button.is-on{border-color:var(--accent);background:#10200f;box-shadow:inset 3px 0 0 var(--accent)}
 #scg-root .scg-stage.no-ret .scg-reticle{display:none}
 #scg-root .scg-seg{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
 #scg-root .scg-seg span{font-size:10px;letter-spacing:.14em;color:var(--ink-faint);width:52px}
@@ -535,7 +539,7 @@
         <!-- patient set-up: CT room, prone "superman" -->
         <div class="scg-room scg-hidden" id="scgRoom">
           <div class="scg-room3d" id="scgRoom3d" aria-label="3-D view: patient lying prone, head first, left arm stretched above the head with the wrist in the CT gantry"></div>
-          <div class="scg-roomcap"><b>PRONE · HEAD FIRST · LEFT ARM OVERHEAD</b><span id="scgRoomStep">the “superman” position — wrist at isocentre, body out of the beam</span></div>
+          <div class="scg-roomcap"><b>PATIENT ON THE TABLE</b><span id="scgRoomStep">the “superman” position — wrist at isocentre, body out of the beam</span></div>
           <svg class="scg-roomsvg" viewBox="0 0 600 600" preserveAspectRatio="xMidYMid meet" aria-label="Patient lying prone with the left arm stretched overhead into the CT gantry">
             <rect x="0" y="452" width="600" height="148" fill="#0e110d"/>
             <line x1="0" y1="452" x2="600" y2="452" stroke="#2c3a22" stroke-width="2"/>
@@ -668,7 +672,7 @@
 </div>
 
 <script src="assets/calib.js"></script>
-<script src="room3d.js?v=2"></script>
+<script src="room3d.js?v=6"></script>
 <script>
 (function(){
 "use strict";
@@ -862,6 +866,23 @@ function toCanvas(hu, w, h, win){
 }
 /* kernel: the source is a very sharp photon-counting reconstruction; a soft-tissue kernel is modelled as
    a 0.55 mm gaussian (less noise, blurred trabeculae and fracture lines) */
+/* arm by the side: the torso is in the beam next to the wrist - simulated beam-hardening streaks along the
+   line through the body, photon-starvation noise, and slice-to-slice banding on the reformats */
+function bodyArtefact(hu, w, h, axial){
+  var o=new Float32Array(hu.length), cx=w*0.5, cy=h*0.5, i, x, y;
+  var band = axial ? null : new Float32Array(h);
+  if(band) for(y=0;y<h;y++) band[y]=28*gauss();
+  for(y=0;y<h;y++) for(x=0;x<w;x++){
+    i=y*w+x; var v=hu[i];
+    if(axial){
+      var dx=x-cx, dy=y-cy, th=Math.atan2(dy,dx), r=Math.sqrt(dx*dx+dy*dy);
+      // dark streaks spreading from the body side (left of the image), bright shoulders between them
+      v += (-75*Math.pow(Math.max(0,Math.cos(th)),6) + 38*Math.sin(th*11+0.6)) * Math.min(1, r/70);
+    } else v += band[y];
+    o[i]=v + 38*gauss();
+  }
+  return o;
+}
 function applyKernel(hu, w, h, pxmm){
   return S.kernel==="soft" ? gaussBlur(hu, w, h, 0.55/pxmm) : hu;
 }
@@ -879,6 +900,7 @@ function renderAxial(k, cb){
     var n=IMG_W*IMG_W, hu=new Float32Array(n), tw=0, i;
     ws.forEach(function(p,j){ tw+=p[1]; for(i=0;i<n;i++) hu[i]+=sl[j].hu[i]*p[1]; });
     for(i=0;i<n;i++) hu[i]/=tw;
+    if(S.pos==="side") hu=bodyArtefact(hu, IMG_W, IMG_W, true);
     hu=applyKernel(hu, IMG_W, IMG_W, SP);
     cb(dfovCanvas(toCanvas(hu, IMG_W, IMG_W, WINDOWS[S.win])));
   });
@@ -904,6 +926,7 @@ function renderMPR(plane, i, cb){
   loadHU((plane==="cor"?"cor_":"sag_")+pad2(i), function(r){
     if(!r){ cb(null); return; }
     var hu=zBlur(r.hu, r.w, r.h, S.thick>=1 ? S.thick/PX : 0);
+    if(S.pos==="side") hu=bodyArtefact(hu, r.w, r.h, false);
     hu=applyKernel(hu, r.w, r.h, PX);
     var nat=toCanvas(hu, r.w, r.h, WINDOWS[S.win]);
     var w=dfov(), e=extent(), a0;
@@ -1109,19 +1132,39 @@ function kvBlock(rows){
     return '<div class="scg-kv"><span>'+r[0]+'</span><span>'+r[1]+'</span></div>';
   }).join('')+'</div>';
 }
-var CHECKS = [
-  "Request checked: <b>LEFT</b> wrist · fall on the outstretched hand, query occult fracture",
-  "Watch, rings and bracelets removed from the left arm",
-  "Prone, <b>head first</b>, left arm stretched above the head — the “superman” position",
-  "Palm down, wrist straight, fingers extended · foam pad and sandbags",
-  "Head turned away and resting on the pillow · right arm by the side",
-  "Lasers on the wrist · wrist at isocentre, centred in the bore"
-];
 var POS = {
-  prone:   { label:"PRONE · ARM OVERHEAD (“SUPERMAN”)", desc:"Lie face down, head first, the left arm stretched above the head with the palm flat on the table." },
-  overhead:{ label:"SUPINE · ARM OVERHEAD", desc:"Lie on the back with the left arm raised above the head and the hand resting on the table." },
-  side:    { label:"SUPINE · ARM BY THE SIDE", desc:"Lie on the back with the left arm resting by the side on the table." }
+  prone:   { label:"PRONE · ARM OVERHEAD (“SUPERMAN”)", desc:"Lie face down, head first, the left arm stretched above the head with the palm flat on the table.",
+             cap:"PRONE · HEAD FIRST · LEFT ARM OVERHEAD", sub:"the “superman” position — only the wrist enters the scan plane", short:"prone · arm overhead", scout:"Prone · head first · arm up",
+             lie:"Prone, <b>head first</b>, left arm stretched above the head — the “superman” position",
+             rest:"Head turned away and resting on the pillow · right arm by the side",
+             end:"wrist at isocentre · head and body outside the scan plane" },
+  overhead:{ label:"SUPINE · ARM OVERHEAD", desc:"Lie on the back with the left arm raised above the head and the hand resting on the table.",
+             cap:"SUPINE · HEAD FIRST · LEFT ARM OVERHEAD", sub:"the fall-back if the patient cannot lie prone", short:"supine · arm overhead", scout:"Supine · head first · arm up",
+             lie:"Supine, <b>head first</b>, left arm raised above the head",
+             rest:"Head on the pillow · right arm by the side",
+             end:"wrist at isocentre · head and body outside the scan plane" },
+  side:    { label:"SUPINE · ARM BY THE SIDE", desc:"Lie on the back with the left arm resting by the side on the table.",
+             cap:"SUPINE · HEAD FIRST · ARMS BY THE SIDE", sub:"the torso has to pass into the gantry to reach the wrist", short:"supine · arm by the side", scout:"Supine · arm by the side",
+             lie:"Supine, <b>head first</b>, left arm resting by the side",
+             rest:"Head on the pillow · right arm by the side",
+             end:"wrist in the scan plane — beside the hip, off isocentre, with the torso in the beam" }
 };
+function checks(){
+  var P=POS[S.pos||"prone"];
+  return [
+    "Request checked: <b>LEFT</b> wrist · fall on the outstretched hand, query occult fracture",
+    "Watch, rings and bracelets removed from the left arm",
+    P.lie,
+    "Palm down, wrist straight, fingers extended · foam pad and sandbags",
+    P.rest,
+    S.pos==="side" ? "Lasers on the wrist · scan plane at the wrist (it cannot be centred in the bore)" : "Lasers on the wrist · wrist at isocentre, centred in the bore"
+  ];
+}
+function setRoomCaption(){
+  var P=POS[S.pos||"side"], cap=room.querySelector(".scg-roomcap b");
+  cap.textContent = S.pos ? P.cap : "PATIENT ON THE TABLE";
+  $("scgRoomStep").textContent = S.pos ? P.sub : "supine, arms by the side — choose how they should lie";
+}
 function render(){
   renderCmds();
   positionOverlays();
@@ -1129,24 +1172,20 @@ function render(){
   if(S.phase==="setup"){
     railTitle.textContent="Patient set-up";
     railDesc.textContent="CT left wrist · plain bone";
-    if(!S.pos){
-      railBody.innerHTML=
-        '<div class="scg-hint">How should the patient lie for a CT of the <b>left wrist</b>? Pick a position.</div>'+
+    var CH=checks(), done = S.loaded ? CH.length : (S.loading ? S.checkN||0 : 2);
+    railBody.innerHTML = (S.loaded || S.loading ? "" :
+        '<div class="scg-hint">How should the patient lie for a CT of the <b>left wrist</b>? '+(S.pos?"You can still change it before loading — your first choice is the one graded.":"Pick a position.")+'</div>'+
         '<div class="scg-choice">'+Object.keys(POS).map(function(k){
-          return '<button type="button" data-p="'+k+'"><b>'+POS[k].label+'</b><span>'+POS[k].desc+'</span></button>';
-        }).join('')+'</div>';
-      Array.prototype.forEach.call(railBody.querySelectorAll(".scg-choice button"),function(b){
-        b.onclick=function(){ logCmd(b.dataset.p); choosePos(b.dataset.p); };
-      });
-    } else {
-      var done = S.loaded ? CHECKS.length : (S.loading ? S.checkN||0 : 2);
-      railBody.innerHTML =
-        '<div class="scg-check">'+CHECKS.map(function(c,i){
+          return '<button type="button" data-p="'+k+'" class="'+(S.pos===k?"is-on":"")+'"><b>'+POS[k].label+'</b><span>'+POS[k].desc+'</span></button>';
+        }).join('')+'</div>')+
+      (S.pos ? '<div class="scg-check">'+CH.map(function(c,i){
           return '<div class="'+(i<done?"is-done":"")+'"><i>'+(i<done?"✓":"○")+'</i><span>'+c+'</span></div>';
         }).join('')+'</div>'+
-        '<div class="scg-hint">'+(S.loaded ? "Wrist at isocentre. Command: <b>scout</b>"
-          : "Command: <b>load</b> — moves the table head first until the wrist reaches the scan plane.")+'</div>';
-    }
+        '<div class="scg-hint">'+(S.loaded ? (S.pos==="side"?"Wrist in the scan plane. Command: <b>scout</b>":"Wrist at isocentre. Command: <b>scout</b>")
+          : S.loading ? "Table moving…" : "Command: <b>load</b> — moves the table head first until the wrist reaches the scan plane.")+'</div>' : "");
+    Array.prototype.forEach.call(railBody.querySelectorAll(".scg-choice button"),function(b){
+      b.onclick=function(){ logCmd(b.dataset.p); choosePos(b.dataset.p); };
+    });
     vpTL.textContent=""; vpBL.textContent=""; vpBR.textContent="";
   }
   else if(S.phase==="topo"){
@@ -1155,7 +1194,7 @@ function render(){
     railBody.innerHTML=kvBlock([
         ["Projections","PA + lateral"],
         ["Technique","80 kV · 20 mA"],
-        ["Position","Prone · head first · arm up"],
+        ["Position",POS[S.pos].scout],
         ["Purpose","Plan the range and the DFOV"]
       ])+'<div class="scg-hint">Low-dose projection radiographs of the hand and forearm.</div>';
   }
@@ -1242,21 +1281,16 @@ function render(){
    PATIENT SET-UP (prone, head first, arm overhead)
    ============================================================= */
 function choosePos(p){
-  if(S.pos) return;
+  if(S.loaded || S.loading || S.pos===p) return;
   if(!S.posFirst) S.posFirst=p;
-  if(p==="prone"){
-    S.pos="prone";
-    log("correct — <b>prone, arm overhead</b>: only the wrist is in the scan plane, so no streaks from the body, less dose, and the wrist sits at isocentre.","ok");
-  } else {
-    var why = p==="side"
-      ? "With the arm by the side the <b>torso is in the beam</b>: beam-hardening streaks across the wrist, much more dose and noise, and the wrist sits far off isocentre."
-      : "Supine with the arm overhead keeps the body out of the beam, and is the fall-back if the patient cannot lie prone — but the hand rarely lies flat and still. The preferred position is <b>prone</b>.";
-    log(why,"warn");
-    log("radiographer repositions the patient: prone, head first, left arm overhead (“superman”).","sys");
-    S.pos="prone";
-  }
+  S.pos=p;
+  if(p==="prone") log("<b>prone, arm overhead</b>: only the wrist is in the scan plane — no streaks from the body, less dose, and the wrist sits at isocentre.","ok");
+  else if(p==="overhead") log("supine with the arm overhead keeps the body out of the beam and is the fall-back if the patient cannot lie prone — but the hand rarely lies as flat and still. The preferred position is <b>prone</b>.","warn");
+  else log("with the arm by the side the <b>torso has to go into the gantry</b>: beam-hardening streaks across the wrist, much more dose and noise, and the wrist sits far off isocentre.","warn");
+  if(room3d) room3d.setPose(p);
+  setRoomCaption();
   render();
-  log("Command: <b>load</b>","sys");
+  log("Command: <b>load</b>"+(S.posFirst!==p?"  (graded on your first choice)":""),"sys");
 }
 var THREE_URL = "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js";
 var room3d = null, room3dTried = false;
@@ -1268,6 +1302,7 @@ function init3D(){
   import(THREE_URL).then(function(THREE){
     try{
       room3d = window.SCG_ROOM3D(THREE, $("scgRoom3d"));
+      room3d.setPose(S.pos || "side");               // the patient arrives supine, arms by the side
       room.classList.add("is-3d");
       room3d.start();
       if(S.loading && room3d) room3d.finish();
@@ -1278,8 +1313,9 @@ function gotoSetup(){
   setPhase("setup");
   img.removeAttribute("src"); imgB.removeAttribute("src");
   room.classList.remove("is-in");
+  setRoomCaption();
   init3D();
-  log("CT LEFT wrist requested. Choose how the patient lies.","sys");
+  log("CT LEFT wrist requested. The patient is on the table, supine with the arms by the side — choose how they should lie.","sys");
 }
 function loadPatient(){
   if(S.loaded || S.loading || !S.pos) return;
@@ -1289,14 +1325,14 @@ function loadPatient(){
     log("table moving — head first toward the gantry…","sys");
     render();
     room3d.play(function(step){
-      if(step===1){ S.checkN=4; stepTx.textContent="table moving head first — the arm leads into the bore"; }
+      if(step===1){ S.checkN=4; stepTx.textContent= S.pos==="side" ? "table moving head first — head and chest go into the bore first" : "table moving head first — the arm leads into the bore"; }
       if(step===2){ S.checkN=5; stepTx.textContent="landmark: wrist joint at the gantry lasers · table zeroed"; log("lasers on — wrist landmarked, table position zeroed.","sys"); }
-      if(step===3){ stepTx.textContent="moving to scan position — wrist at isocentre"; }
+      if(step===3){ stepTx.textContent= S.pos==="side" ? "moving to scan position — the torso passes through the gantry" : "moving to scan position — wrist at isocentre"; }
       render();
     }, function(){
-      S.checkN=CHECKS.length; S.loading=false; S.loaded=true;
-      stepTx.textContent="wrist at isocentre · head and body outside the scan plane";
-      log("wrist at isocentre. Command: <b>scout</b>","ok");
+      S.checkN=checks().length; S.loading=false; S.loaded=true;
+      stepTx.textContent=POS[S.pos].end;
+      log(S.pos==="side" ? "wrist in the scan plane, beside the hip and off isocentre. Command: <b>scout</b>" : "wrist at isocentre. Command: <b>scout</b>", S.pos==="side"?"warn":"ok");
       render();
     });
     return;
@@ -1306,7 +1342,7 @@ function loadPatient(){
   render();
   var iv=setInterval(function(){
     S.checkN++; render();
-    if(S.checkN>=CHECKS.length){
+    if(S.checkN>=checks().length){
       clearInterval(iv);
       S.loading=false; S.loaded=true;
       log("wrist at isocentre. Command: <b>scout</b>","ok");
@@ -1452,7 +1488,8 @@ function computeScore(){
   rows.push({ kind: pf==="prone"?"ok":(pPts?"warn":"bad"), title:"Patient position", pts:pPts, max:15,
     body: pf==="prone" ? "Prone, head first, arm overhead — the wrist alone is in the scan plane, at isocentre, with no streaks from the body."
         : pf==="overhead" ? "Supine with the arm overhead was your first choice: acceptable when the patient cannot lie prone, but prone (“superman”) keeps the hand flatter and steadier."
-        : "Arm by the side was your first choice: the torso would sit in the beam — beam-hardening streaks, far more dose and noise, and the wrist off isocentre." });
+        : "Arm by the side was your first choice: the torso sits in the beam — beam-hardening streaks, far more dose and noise, and the wrist off isocentre." +
+          (S.pos==="side" ? " You can see the streaks and noise on these images." : "") });
   // 2) coverage (40)
   var t=topMm(), b=botMm();
   var dPts = distalOK() ? 15 : (t <= LM.cmc ? 6 : 0);
@@ -1545,7 +1582,7 @@ function showResult(){
       '<div class="scg-hero"><img id="scgHeroImg" alt="Coronal reformat of the wrist with your reconstruction settings"><div class="scg-hero-lab">CORONAL REFORMAT · CARPUS\n'+(S.kernel==="bone"?"bone":"soft-tissue")+' kernel · '+S.thick+' mm · bone window</div><div class="scg-hero-hu">DFOV '+dfov().toFixed(0)+' mm\nrange '+lenMm().toFixed(0)+' mm</div></div>'+
     '</div>'+
     '<div class="scg-debrief">'+
-      '<div class="scg-grade '+gcls+'"><b>'+pct+'%</b><span>'+verdict.toUpperCase()+'<br>prone · arm overhead'+
+      '<div class="scg-grade '+gcls+'"><b>'+pct+'%</b><span>'+verdict.toUpperCase()+'<br>'+POS[S.pos].short+
         '<div class="scg-bar"><i style="width:'+pct+'%;background:'+(gcls?(gcls==="is-warn"?"var(--warn)":"var(--bad)"):"var(--accent)")+'"></i></div></span></div>'+
       sc.rows.map(function(r){ return drow(r.kind, r.title, r.body, r.pts+" / "+r.max); }).join('')+
       '<button class="scg-again" id="scgAgain">⟲ '+(pct===100?"Scan another way":"Try again")+'</button>'+
@@ -1572,7 +1609,7 @@ var CREDITS =
   'licensed <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">CC BY-SA 4.0</a>. '+
   '<b>Changes made:</b> the volume was resampled to 0.22 mm (2 × 2 × 2 binning); the PA and lateral scanograms are simulated line-integral projections through that volume (not acquired localisers), padded with air and colour-tinted; '+
   'axial images are 0.6 mm slabs every 1.5 mm and coronal / sagittal reformats are 0.6 mm slabs every 1.5 mm at 0.3 mm pixels, re-encoded as JPEG; '+
-  'in your browser the images are cropped and resampled to the chosen DFOV, blurred to simulate a soft-tissue kernel, and averaged / smeared to simulate thicker slices. '+
+  'in your browser the images are cropped and resampled to the chosen DFOV, blurred to simulate a soft-tissue kernel, and averaged / smeared to simulate thicker slices; if the arm-by-the-side position is chosen, streaks and noise are added to simulate the torso in the beam. '+
   'The dataset lists specimen 1 as a right wrist; its anatomy is that of a left wrist, which is how it is presented here. This is a cadaveric donor scan presented as a teaching patient. '+
   'This adaptation is shared under the same licence (CC BY-SA 4.0). The 3-D patient-positioning scene is original (built with three.js, MIT licence). Neither the dataset authors nor KU Leuven endorse this simulator.';
 
@@ -1637,9 +1674,9 @@ Array.prototype.forEach.call(winBtns.querySelectorAll("button[data-plane]"),func
    RESET / BOOT
    ============================================================= */
 function resetAll(){
-  var first=S.posFirst;
+  var first=S.posFirst, pos=S.pos;
   S = freshState();
-  S.pos="prone"; S.posFirst=first; S.loaded=true;        // patient stays on the table, position already graded
+  S.pos=pos; S.posFirst=first; S.loaded=true;            // patient stays on the table, position already graded
   resultEl.classList.add("scg-hidden");
   achWrap.classList.add("scg-hidden"); achWrap.classList.remove("is-playing");
   fovEl.classList.remove("is-off"); pip.classList.remove("is-off");
